@@ -1,0 +1,57 @@
+; Pulse/Frequence counter PIO for Raspberry Pico.
+; Pico running at standard clock frequency can reliably count upto 15Mhz, and higher if one 
+; is willing to run the core at higher frequency.
+
+.program counter
+start:
+    mov x !null         		; setup initial x value
+	jmp pin 	start		 	; wait for PPS_PIN to go low
+    wait 0 pin 0				; Lets start by having PIN_FREQ low.
+
+pps_low_loop:
+;============
+	wait 1 pin 0            	; wait for frequency_pin to go high
+	jmp pin 	pps_send_count	; if we see PPS, then send count.
+	wait 0 pin 0				; wait for pin to go low
+	jmp x-- 	pps_low_loop	; Incriment count
+
+pps_high_loop:
+;=============
+	wait 1 pin 0            	; wait for frequency_pin to go high
+	jmp x-- 	hijump          ; count the pulse
+hijump:
+	wait 0 pin 0                ; and wait for it to go LOW again
+	jmp pin 	pps_high_loop	; if PPS still high, stay in high_loop.
+	jmp 		pps_low_loop	; if PPS has fallen, then back to low_loop
+
+pps_send_count:
+;==============
+	mov isr x 
+	push noblock        		; Trasfer ISR to FIFO
+    irq set 0                   ; set IRQ so CPU can handle the PPS
+	wait 0 pin 0				; wait for f_pin to go low again
+	jmp x-- 	pps_high_loop	; Back around loop. We dec x, becuase that is why we got here.
+
+
+% c-sdk {
+static inline void counter_program_init(PIO pio, uint sm, uint offset, uint f_pin, uint pps_pin) {
+    pio_sm_config c = counter_program_get_default_config(offset);
+
+    // set pins to in direction
+    pio_sm_set_consecutive_pindirs(pio, sm, f_pin, 1, false);
+    pio_sm_set_consecutive_pindirs(pio, sm, pps_pin, 1, false);
+
+    // connect GPIOs to this PIO block
+    pio_gpio_init(pio, pps_pin);
+    pio_gpio_init(pio, f_pin);
+
+    sm_config_set_in_pins(&c, f_pin);
+    sm_config_set_jmp_pin(&c, pps_pin);
+
+    // enable IRQ
+    pio_set_irq0_source_enabled(pio, pis_interrupt0 + sm, true);
+ 
+    pio_sm_init(pio, sm, offset, &c);
+ //   pio_sm_set_enabled(pio, sm, true);    
+}
+%}
